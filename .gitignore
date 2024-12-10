@@ -1,18 +1,16 @@
+# Maven build directories
 target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
 
-### IntelliJ IDEA ###
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
+# IntelliJ IDEA
+.idea/
 *.iws
 *.iml
 *.ipr
 
-### Eclipse ###
+# Eclipse
 .apt_generated
 .classpath
 .factorypath
@@ -21,23 +19,23 @@ target/
 .springBeans
 .sts4-cache
 
-### NetBeans ###
+# NetBeans
 /nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
 build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
-### VS Code ###
+# VS Code
 .vscode/
 
-### Mac OS ###
+# Mac OS
 .DS_Store
 
-### Properties file ###
+# Properties file
 application.properties
 
 # SQLite Database
@@ -55,7 +53,7 @@ tradingboy.db
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
 
-# Package Files #
+# Package Files
 *.jar
 *.war
 *.ear
@@ -63,14 +61,5 @@ tradingboy.db
 # Virtual machine crash logs
 hs_err_pid*
 
-# Maven
-/target/
-/pom.xml.tag
-/pom.xml.releaseBackup
-/pom.xml.versionsBackup
-/pom.xml.next
-/release.properties
-
 # OS Files
-.DS_Store
 Thumbs.db
