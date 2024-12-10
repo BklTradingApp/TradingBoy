@@ -1,18 +1,19 @@
+// src/main/java/com/tradingboy/models/Candle.java
+
 package com.tradingboy.models;
 
 /**
  * Candle:
- * Represents a single OHLCV candle over a set interval (5-min in our case).
- * Stored in DB and used by indicators and strategy.
+ * Represents a single candle (aggregated from multiple bars).
  */
 public class Candle {
-    private final String symbol;
-    private final long timestamp;
-    private final double open;
-    private final double close;
-    private final double high;
-    private final double low;
-    private final double volume;
+    private String symbol;
+    private long timestamp; // Epoch milliseconds
+    private double open;
+    private double close;
+    private double high;
+    private double low;
+    private double volume;
 
     public Candle(String symbol, long timestamp, double open, double close, double high, double low, double volume) {
         this.symbol = symbol;
@@ -24,6 +25,7 @@ public class Candle {
         this.volume = volume;
     }
 
+    // Getters
     public String getSymbol() {
         return symbol;
     }
@@ -51,4 +53,6 @@ public class Candle {
     public double getVolume() {
         return volume;
     }
+
+    // Setters can be added if needed
 }

@@ -1,3 +1,5 @@
+// src/main/java/com/tradingboy/trading/PerformanceTracker.java
+
 package com.tradingboy.trading;
 
 import com.tradingboy.db.DatabaseManager;
@@ -9,93 +11,59 @@ import java.sql.ResultSet;
 
 /**
  * PerformanceTracker:
- * After SELL trades, calculates profit and updates cumulative performance metrics.
- * Uses FIFO logic to determine profit from BUY trades.
- * No simplifications.
+ * Tracks and updates performance metrics.
  */
 public class PerformanceTracker {
     private static final Logger logger = LoggerFactory.getLogger(PerformanceTracker.class);
 
+    /**
+     * Updates performance metrics after a trade.
+     * @param symbol The trading symbol.
+     */
     public static void updatePerformance(String symbol) {
-        // Similar logic as before: fetch last SELL trade, match with BUY trades FIFO, compute profit, update metrics
-        String lastSellSql = "SELECT * FROM trades WHERE symbol=? AND side='sell' ORDER BY timestamp DESC LIMIT 1";
-        try (PreparedStatement ps = DatabaseManager.getConnection().prepareStatement(lastSellSql)) {
+        // Placeholder for performance tracking logic
+        // You can implement logic to track total trades, winning trades, etc.
+
+        // Example: Increment total trades and determine if it's a winning trade
+        // This requires fetching trade details from the 'trades' table
+        // and comparing buy and sell prices to calculate profit/loss
+
+        String sql = "SELECT side, price FROM trades WHERE symbol = ? ORDER BY timestamp DESC LIMIT 2";
+        try (PreparedStatement ps = DatabaseManager.getInstance().getConnection().prepareStatement(sql)) {
             ps.setString(1, symbol);
             try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    return; // no sell trades yet
+                String buyPriceStr = null;
+                String sellPriceStr = null;
+                while (rs.next()) {
+                    String side = rs.getString("side");
+                    double price = rs.getDouble("price");
+                    if ("buy".equalsIgnoreCase(side)) {
+                        buyPriceStr = String.valueOf(price);
+                    } else if ("sell".equalsIgnoreCase(side)) {
+                        sellPriceStr = String.valueOf(price);
+                    }
                 }
-                int sellQty = rs.getInt("qty");
-                double sellPrice = rs.getDouble("price");
-                long sellTime = rs.getLong("timestamp");
 
-                String buysSql = "SELECT * FROM trades WHERE symbol=? AND side='buy' AND timestamp <= ? ORDER BY timestamp ASC";
-                try (PreparedStatement buyPs = DatabaseManager.getConnection().prepareStatement(buysSql)) {
-                    buyPs.setString(1, symbol);
-                    buyPs.setLong(2, sellTime);
-                    try (ResultSet brs = buyPs.executeQuery()) {
-                        int remainingQty = sellQty;
-                        double totalCost = 0.0;
-                        while (brs.next() && remainingQty > 0) {
-                            int buyQty = brs.getInt("qty");
-                            double buyPrice = brs.getDouble("price");
-                            if (buyQty <= remainingQty) {
-                                totalCost += buyQty * buyPrice;
-                                remainingQty -= buyQty;
-                            } else {
-                                totalCost += remainingQty * buyPrice;
-                                remainingQty = 0;
-                            }
-                        }
+                if (buyPriceStr != null && sellPriceStr != null) {
+                    double buyPrice = Double.parseDouble(buyPriceStr);
+                    double sellPrice = Double.parseDouble(sellPriceStr);
+                    double profit = sellPrice - buyPrice;
 
-                        double sellRevenue = sellQty * sellPrice;
-                        double profit = sellRevenue - totalCost;
-                        logger.info("Calculated profit for last SELL of {}: {} USD", symbol, profit);
-                        updateCumulativePerformance(profit);
+                    // Insert or update performance_records table
+                    String insertPerf = "INSERT INTO performance_records (total_trades, winning_trades, losing_trades, total_profit, timestamp) " +
+                            "VALUES (1, ?, ?, ?)";
+                    boolean isWinning = profit > 0;
+                    try (PreparedStatement psPerf = DatabaseManager.getInstance().getConnection().prepareStatement(insertPerf)) {
+                        psPerf.setInt(1, isWinning ? 1 : 0);
+                        psPerf.setInt(2, isWinning ? 0 : 1);
+                        psPerf.setDouble(3, profit);
+                        psPerf.executeUpdate();
+                        logger.info("Updated performance for {}: Profit = {}", symbol, profit);
                     }
                 }
             }
         } catch (Exception e) {
-            logger.error("Error updating performance for {}", symbol, e);
-        }
-    }
-
-    private static void updateCumulativePerformance(double profit) {
-        String selectPerf = "SELECT * FROM performance_records ORDER BY id DESC LIMIT 1";
-        int totalTrades = 0;
-        int winningTrades = 0;
-        int losingTrades = 0;
-        double totalProfit = 0.0;
-
-        try (PreparedStatement ps = DatabaseManager.getConnection().prepareStatement(selectPerf);
-             ResultSet rs = ps.executeQuery()) {
-            if (rs.next()) {
-                totalTrades = rs.getInt("total_trades");
-                winningTrades = rs.getInt("winning_trades");
-                losingTrades = rs.getInt("losing_trades");
-                totalProfit = rs.getDouble("total_profit");
-            }
-        } catch (Exception e) {
-            logger.error("Error reading current performance", e);
-        }
-
-        totalTrades++;
-        if (profit > 0) winningTrades++; else losingTrades++;
-        totalProfit += profit;
-
-        long now = System.currentTimeMillis();
-        String insertPerf = "INSERT INTO performance_records (total_trades, winning_trades, losing_trades, total_profit, timestamp) VALUES (?,?,?,?,?)";
-        try (PreparedStatement ps = DatabaseManager.getConnection().prepareStatement(insertPerf)) {
-            ps.setInt(1, totalTrades);
-            ps.setInt(2, winningTrades);
-            ps.setInt(3, losingTrades);
-            ps.setDouble(4, totalProfit);
-            ps.setLong(5, now);
-            ps.executeUpdate();
-            logger.info("Updated performance metrics: totalTrades={}, winningTrades={}, losingTrades={}, totalProfit={}",
-                    totalTrades, winningTrades, losingTrades, totalProfit);
-        } catch (Exception e) {
-            logger.error("Error updating performance metrics", e);
+            logger.error("Error updating performance for symbol {}", symbol, e);
         }
     }
 }
