@@ -1,5 +1,3 @@
-// src/main/java/com/tradingboy/alpaca/AlpacaWebSocketClient.java
-
 package com.tradingboy.alpaca;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -10,6 +8,7 @@ import com.tradingboy.strategies.RSITradingStrategy;
 import com.tradingboy.trading.DatabasePositionManager;
 import com.tradingboy.trading.PerformanceTracker;
 import com.tradingboy.utils.ConfigUtil;
+import com.tradingboy.utils.FormatUtil;
 import com.tradingboy.utils.TelegramMessenger;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -21,6 +20,8 @@ import java.sql.PreparedStatement;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * AlpacaWebSocketClient:
@@ -37,6 +38,8 @@ public class AlpacaWebSocketClient extends WebSocketClient {
     private final Map<String, List<BarMessage>> symbolBars = new HashMap<>();
     private final int BARS_PER_CANDLE = 5;
 
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+
     /**
      * Constructor.
      * @param serverUri Alpaca stream URI
@@ -50,6 +53,11 @@ public class AlpacaWebSocketClient extends WebSocketClient {
         }
     }
 
+    /**
+     * Called when the WebSocket connection is opened.
+     * Sends the authentication message to Alpaca.
+     * @param handshakedata The handshake data.
+     */
     @Override
     public void onOpen(ServerHandshake handshakedata) {
         logger.info("🔗 WebSocket connection opened, sending auth message.");
@@ -57,9 +65,16 @@ public class AlpacaWebSocketClient extends WebSocketClient {
         String secretKey = ConfigUtil.getString("ALPACA_SECRET_KEY");
         String authMessage = String.format("{\"action\":\"auth\",\"key\":\"%s\",\"secret\":\"%s\"}", apiKey, secretKey);
         send(authMessage);
-        logger.debug("Auth message sent: {}", authMessage);
+
+        // Avoid logging the entire auth message as it contains sensitive information
+        logger.debug("Auth message sent."); // Changed from logging authMessage
     }
 
+    /**
+     * Called when a message is received from the WebSocket.
+     * Parses and processes the message.
+     * @param message The received message.
+     */
     @Override
     public void onMessage(String message) {
         logger.debug("📩 Received message: {}", message);
@@ -125,8 +140,12 @@ public class AlpacaWebSocketClient extends WebSocketClient {
             // Send Telegram notification
             String env = ConfigUtil.getString("ALPACA_ENV");
             double balance = AlpacaService.getAccountBalance();
-            TelegramMessenger.sendMessage("🚀 TradingBoy started.\nEnvironment: " + env +
-                    "\nAccount Balance: $" + (Double.isNaN(balance) ? "Unavailable" : String.format("%.2f", balance)));
+            String formattedBalance = Double.isNaN(balance) ? "Unavailable" : FormatUtil.formatCurrency(balance);
+            String telegramMessage = "🚀 TradingBoy started.\n" +
+                    "Environment: " + env + "\n" +
+                    "Account Balance: " + formattedBalance + "\n" +
+                    "Symbols Traded: " + symbols;
+            TelegramMessenger.sendMessage(telegramMessage);
         } else {
             logger.info("Received success message: {}", msg);
         }
@@ -177,23 +196,35 @@ public class AlpacaWebSocketClient extends WebSocketClient {
         }
     }
 
+    /**
+     * Called when the WebSocket connection is closed.
+     * @param code The closure code.
+     * @param reason The reason for closure.
+     * @param remote Whether the closure was initiated by the remote host.
+     */
     @Override
     public void onClose(int code, String reason, boolean remote) {
         logger.info("🔌 WebSocket closed: code={}, reason={}, remote={}", code, reason, remote);
         // Send Telegram notification
         TelegramMessenger.sendMessage("🔌 TradingBoy WebSocket connection closed.\nReason: " + (reason.isEmpty() ? "Unknown" : reason));
 
-        // Attempt to reconnect after a delay (optional)
-        try {
-            Thread.sleep(5000); // Wait for 5 seconds before reconnecting
-            this.reconnect();
-            logger.info("🔄 Attempting to reconnect to Alpaca WebSocket...");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.error("❌ Reconnection thread interrupted", e);
-        }
+        // Attempt to reconnect after a delay (optional) using ExecutorService
+        executor.submit(() -> {
+            try {
+                Thread.sleep(5000); // Wait for 5 seconds before reconnecting
+                this.reconnect();
+                logger.info("🔄 Attempting to reconnect to Alpaca WebSocket...");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.error("❌ Reconnection thread interrupted", e);
+            }
+        });
     }
 
+    /**
+     * Called when a WebSocket error occurs.
+     * @param ex The exception that occurred.
+     */
     @Override
     public void onError(Exception ex) {
         logger.error("❌ WebSocket error occurred", ex);
@@ -205,6 +236,12 @@ public class AlpacaWebSocketClient extends WebSocketClient {
      * Subscribes to bar data for all symbols after successful authentication.
      */
     private void subscribeToBars() {
+        if (symbols.isEmpty()) {
+            logger.warn("⚠️ No symbols provided for subscription.");
+            return;
+        }
+
+        // Construct the subscription message with all symbols
         StringBuilder symbolsArray = new StringBuilder();
         for (int i = 0; i < symbols.size(); i++) {
             symbolsArray.append("\"").append(symbols.get(i).trim()).append("\"");
@@ -236,11 +273,8 @@ public class AlpacaWebSocketClient extends WebSocketClient {
             logger.info("📊 Inserted a 5-min candle for {}", bar.getSymbol());
             barsList.clear();
 
-            // After inserting the candle, you can decide to run strategies
+            // After inserting the candle, run strategies
             runStrategiesForAllSymbols();
-
-            // Optionally, send periodic Telegram update
-            sendPeriodicTelegramUpdate();
         }
     }
 
@@ -353,7 +387,7 @@ public class AlpacaWebSocketClient extends WebSocketClient {
                 double stopPrice = status.getFilledAvgPrice() * (1 - stopLossPercent / 100.0);
                 String stopOrderId = AlpacaService.placeStopOrder(symbol, qty, stopPrice, "sell");
                 if (stopOrderId != null) {
-                    TelegramMessenger.sendMessage("🔒 Stop-loss placed at $" + String.format("%.2f", stopPrice) + " for " + symbol);
+                    TelegramMessenger.sendMessage("🔒 Stop-loss placed at " + FormatUtil.formatCurrency(stopPrice) + " for " + symbol);
                 }
             }
 
@@ -421,7 +455,7 @@ public class AlpacaWebSocketClient extends WebSocketClient {
             ps.setDouble(4, price);
             ps.setLong(5, now);
             ps.executeUpdate();
-            logger.info("📦 Recorded trade: {} {} shares of {} at ${}", side, qty, symbol, price);
+            logger.info("📦 Recorded trade: {} {} shares of {} at {}", side, qty, symbol, FormatUtil.formatCurrency(price));
         } catch (Exception e) {
             logger.error("❌ Error recording trade for {} side {} qty {} price {}", symbol, side, qty, price, e);
         }
@@ -430,22 +464,25 @@ public class AlpacaWebSocketClient extends WebSocketClient {
     /**
      * Sends a periodic Telegram update about the current status.
      */
-    private void sendPeriodicTelegramUpdate() {
-        StringBuilder message = new StringBuilder("📈 TradingBoy Update:\n");
+    private static void sendPeriodicTelegramUpdate(List<String> symbols) {
+        StringBuilder message = new StringBuilder("📈 **TradingBoy Periodic Update**:\n");
+
         // Fetch account balance
         double balance = AlpacaService.getAccountBalance();
-        message.append("💰 Account Balance: $").append(Double.isNaN(balance) ? "Unavailable" : String.format("%.2f", balance)).append("\n");
+        String formattedBalance = Double.isNaN(balance) ? "Unavailable" : FormatUtil.formatCurrency(balance);
+        message.append("💰 **Account Balance**: ").append(formattedBalance).append("\n\n");
 
         // Fetch current positions
-        message.append("📊 Current Positions:\n");
+        message.append("📊 **Current Positions**:\n");
         for (String symbol : symbols) {
-            int qty = DatabasePositionManager.getPosition(symbol);
-            message.append(symbol).append(": ").append(qty).append(" shares\n");
+            int qty = com.tradingboy.trading.DatabasePositionManager.getPosition(symbol);
+            message.append("- ").append(symbol).append(": ").append(qty).append(" shares\n");
         }
+        message.append("\n");
 
         // Current date and time
         String formattedTime = ZonedDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-        message.append("🕒 Time: ").append(formattedTime).append("\n");
+        message.append("🕒 **Time**: ").append(formattedTime).append("\n");
 
         TelegramMessenger.sendMessage(message.toString());
     }

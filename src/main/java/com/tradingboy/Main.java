@@ -1,11 +1,8 @@
-// src/main/java/com/tradingboy/Main.java
-
 package com.tradingboy;
 
 import com.tradingboy.alpaca.AlpacaService;
 import com.tradingboy.alpaca.AlpacaWebSocketClient;
 import com.tradingboy.db.DatabaseManager;
-import com.tradingboy.trading.DatabasePositionManager;
 import com.tradingboy.utils.ConfigUtil;
 import com.tradingboy.utils.FormatUtil;
 import com.tradingboy.utils.TelegramMessenger;
@@ -13,7 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
-import java.util.Arrays;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.*;
 
@@ -42,9 +40,11 @@ public class Main {
         String apiKey = ConfigUtil.getString("ALPACA_API_KEY");
         String secretKey = ConfigUtil.getString("ALPACA_SECRET_KEY");
         boolean useWebSocket = ConfigUtil.getBoolean("USE_WEBSOCKET");
-        String symbolsParam = ConfigUtil.getString("SYMBOLS");
-        List<String> symbols = Arrays.asList(symbolsParam.split(","));
+        List<String> symbols = ConfigUtil.getSymbols();
         String env = ConfigUtil.getString("ALPACA_ENV");
+
+        // Log the environment being used
+        logger.info("🔧 Trading Environment: {}", env);
 
         // Determine WebSocket endpoint based on environment
         String wsUrl;
@@ -52,8 +52,11 @@ public class Main {
             wsUrl = "wss://stream.data.alpaca.markets/v2/test";
             logger.info("🔗 Using Test WebSocket Endpoint: {}", wsUrl);
         } else if ("live".equalsIgnoreCase(env)) {
-            wsUrl = "wss://stream.data.alpaca.markets/v2/sip"; // Production endpoint
+            wsUrl = "wss://stream.data.alpaca.markets/v2/sip"; // Live WebSocket endpoint
             logger.info("🔗 Using Live WebSocket Endpoint: {}", wsUrl);
+        } else if ("paper".equalsIgnoreCase(env)) {
+            wsUrl = "wss://paper-api.alpaca.markets/stream"; // Correct Paper Trading WebSocket endpoint
+            logger.info("🔗 Using Paper WebSocket Endpoint: {}", wsUrl);
         } else {
             logger.warn("⚠️ Unknown ALPACA_ENV '{}', defaulting to test environment.", env);
             wsUrl = "wss://stream.data.alpaca.markets/v2/test";
@@ -80,7 +83,7 @@ public class Main {
 
         // Send Telegram notification about startup
         double balance = AlpacaService.getAccountBalance();
-        String formattedBalance = FormatUtil.formatCurrency(balance);
+        String formattedBalance = Double.isNaN(balance) ? "Unavailable" : FormatUtil.formatCurrency(balance);
         String startupMessage = "🚀 TradingBoy started.\n" +
                 "Environment: " + env + "\n" +
                 "Account Balance: " + formattedBalance + "\n" +
@@ -140,24 +143,20 @@ public class Main {
 
         // Fetch account balance
         double balance = AlpacaService.getAccountBalance();
-        String formattedBalance = FormatUtil.formatCurrency(balance);
-        message.append("💰 **Account Balance**: ")
-                .append(formattedBalance)
-                .append("\n\n");
+        String formattedBalance = Double.isNaN(balance) ? "Unavailable" : FormatUtil.formatCurrency(balance);
+        message.append("💰 **Account Balance**: ").append(formattedBalance).append("\n\n");
 
         // Fetch current positions
         message.append("📊 **Current Positions**:\n");
         for (String symbol : symbols) {
-            int qty = DatabasePositionManager.getPosition(symbol);
+            int qty = com.tradingboy.trading.DatabasePositionManager.getPosition(symbol);
             message.append("- ").append(symbol).append(": ").append(qty).append(" shares\n");
         }
         message.append("\n");
 
         // Current date and time
-        String formattedTime = FormatUtil.formatTimestamp(System.currentTimeMillis());
-        message.append("🕒 **Time**: ")
-                .append(formattedTime)
-                .append("\n");
+        String formattedTime = ZonedDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        message.append("🕒 **Time**: ").append(formattedTime).append("\n");
 
         TelegramMessenger.sendMessage(message.toString());
     }

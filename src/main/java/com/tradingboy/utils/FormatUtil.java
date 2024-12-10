@@ -1,5 +1,3 @@
-// src/main/java/com/tradingboy/utils/FormatUtil.java
-
 package com.tradingboy.utils;
 
 import java.text.NumberFormat;

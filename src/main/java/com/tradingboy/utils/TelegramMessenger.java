@@ -1,5 +1,3 @@
-// src/main/java/com/tradingboy/utils/TelegramMessenger.java
-
 package com.tradingboy.utils;
 
 import kong.unirest.Unirest;

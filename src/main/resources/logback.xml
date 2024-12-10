@@ -19,6 +19,12 @@
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss} %-5level %logger{36} - %msg%n</pattern>
         </encoder>
+        <!-- Define a masking filter -->
+        <turboFilter class="ch.qos.logback.classic.turbo.MatchingFilter">
+            <Regex>.*"key":"[^"]+","secret":"[^"]+".*</Regex>
+            <OnMatch>DENY</OnMatch>
+            <OnMismatch>NEUTRAL</OnMismatch>
+        </turboFilter>
     </appender>
 
     <!-- Root logger configuration at INFO level -->
@@ -27,8 +33,8 @@
         <appender-ref ref="FILE" />
     </root>
 
-    <!-- Logger for AlpacaWebSocketClient at DEBUG level for detailed logs -->
-    <logger name="com.tradingboy.alpaca.AlpacaWebSocketClient" level="DEBUG" />
+    <!-- Logger for AlpacaWebSocketClient at INFO level to prevent DEBUG logs -->
+    <logger name="com.tradingboy.alpaca.AlpacaWebSocketClient" level="INFO" />
 
     <!-- Additional loggers can be added here if needed -->
 </configuration>
