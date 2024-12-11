@@ -10,6 +10,8 @@ import kong.unirest.UnirestException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.ZonedDateTime;
+
 /**
  * AlpacaService:
  * Interacts with Alpaca's REST API for orders and account info.
@@ -50,6 +52,57 @@ public class AlpacaService {
 //    public static void main(String[] args) {
 //        testAuthentication();
 //    }
+
+    /**
+     * Checks if the market is currently closed.
+     * @return true if the market is closed, false if it's open.
+     */
+    public static boolean isMarketClosed() {
+        String url = getBaseUrl() + "/v2/clock";
+        try {
+            HttpResponse<JsonNode> response = Unirest.get(url)
+                    .header("APCA-API-KEY-ID", getApiKey())
+                    .header("APCA-API-SECRET-KEY", getSecretKey())
+                    .asJson();
+
+            if (response.getStatus() == 200) {
+                boolean isOpen = response.getBody().getObject().getBoolean("is_open");
+                return !isOpen;
+            } else {
+                logger.error("Failed to fetch market status. Response: {}", response.getBody());
+                return false; // Assume market is open if API call fails
+            }
+        } catch (Exception e) {
+            logger.error("❌ Error checking market status", e);
+            return false; // Assume market is open on error
+        }
+    }
+
+    /**
+     * Fetches the next market open time.
+     * @return ZonedDateTime representing the next market open time.
+     */
+    public static ZonedDateTime getNextMarketOpen() {
+        String url = getBaseUrl() + "/v2/clock";
+        try {
+            HttpResponse<JsonNode> response = Unirest.get(url)
+                    .header("APCA-API-KEY-ID", getApiKey())
+                    .header("APCA-API-SECRET-KEY", getSecretKey())
+                    .asJson();
+
+            if (response.getStatus() == 200) {
+                String nextOpen = response.getBody().getObject().getString("next_open");
+                return ZonedDateTime.parse(nextOpen); // Parses ISO-8601 format
+            } else {
+                logger.error("Failed to fetch next market open. Response: {}", response.getBody());
+                return ZonedDateTime.now().plusHours(6); // Default to retry after 6 hours
+            }
+        } catch (Exception e) {
+            logger.error("❌ Error fetching next market open time", e);
+            return ZonedDateTime.now().plusHours(6); // Default to retry after 6 hours
+        }
+    }
+
 
     /**
      * Determines the base URL based on the trading environment.

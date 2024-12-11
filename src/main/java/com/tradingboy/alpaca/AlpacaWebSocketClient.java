@@ -17,11 +17,14 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.sql.PreparedStatement;
+import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * AlpacaWebSocketClient:
@@ -39,6 +42,11 @@ public class AlpacaWebSocketClient extends WebSocketClient {
     private final int BARS_PER_CANDLE = 5;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private final ExecutorService reconnectExecutor = Executors.newSingleThreadExecutor();
+
+    private long reconnectDelayMillis = 1000; // Initial delay for exponential backoff
 
     /**
      * Constructor.
@@ -67,7 +75,10 @@ public class AlpacaWebSocketClient extends WebSocketClient {
         send(authMessage);
 
         // Avoid logging the entire auth message as it contains sensitive information
-        logger.debug("Auth message sent."); // Changed from logging authMessage
+        logger.debug("Auth message sent.");
+
+        // Start the ping mechanism to keep the connection alive
+        scheduler.scheduleAtFixedRate(this::sendPing, 15, 15, TimeUnit.SECONDS); // Ping every 15 seconds
     }
 
     /**
@@ -93,6 +104,18 @@ public class AlpacaWebSocketClient extends WebSocketClient {
             }
         } catch (Exception e) {
             logger.error("❌ Error parsing message: {}", message, e);
+        }
+    }
+
+    /**
+     * Sends a ping message to the WebSocket server to keep the connection alive.
+     */
+    public void sendPing() {
+        try {
+            send("{\"action\":\"ping\"}");
+            logger.debug("💓 Sent ping to keep WebSocket alive.");
+        } catch (Exception e) {
+            logger.error("❌ Failed to send ping message", e);
         }
     }
 
@@ -198,6 +221,7 @@ public class AlpacaWebSocketClient extends WebSocketClient {
 
     /**
      * Called when the WebSocket connection is closed.
+     * Implements enhanced reconnection strategy with exponential backoff.
      * @param code The closure code.
      * @param reason The reason for closure.
      * @param remote Whether the closure was initiated by the remote host.
@@ -205,20 +229,46 @@ public class AlpacaWebSocketClient extends WebSocketClient {
     @Override
     public void onClose(int code, String reason, boolean remote) {
         logger.info("🔌 WebSocket closed: code={}, reason={}, remote={}", code, reason, remote);
-        // Send Telegram notification
         TelegramMessenger.sendMessage("🔌 TradingBoy WebSocket connection closed.\nReason: " + (reason.isEmpty() ? "Unknown" : reason));
 
-        // Attempt to reconnect after a delay (optional) using ExecutorService
-        executor.submit(() -> {
+        reconnectExecutor.submit(() -> {
             try {
-                Thread.sleep(5000); // Wait for 5 seconds before reconnecting
+                if (AlpacaService.isMarketClosed()) {
+                    // Market is closed, wait until the market is about to open
+                    ZonedDateTime nextOpen = AlpacaService.getNextMarketOpen();
+                    long waitMillis = Duration.between(ZonedDateTime.now(), nextOpen).toMillis();
+                    logger.info("⏳ Market closed. Waiting until {} to reconnect...", nextOpen);
+                    Thread.sleep(waitMillis);
+                    reconnectDelayMillis = 1000; // Reset backoff on market reopen
+                } else {
+                    // Retry reconnect with exponential backoff
+                    logger.info("🔄 Attempting to reconnect in {} ms...", reconnectDelayMillis);
+                    Thread.sleep(reconnectDelayMillis);
+                    reconnectDelayMillis = Math.min(reconnectDelayMillis * 2, 60000); // Cap at 60 seconds
+                }
+
                 this.reconnect();
-                logger.info("🔄 Attempting to reconnect to Alpaca WebSocket...");
+                logger.info("🔄 Reconnected to Alpaca WebSocket.");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 logger.error("❌ Reconnection thread interrupted", e);
+            } catch (Exception e) {
+                logger.error("❌ Error during reconnection logic", e);
+                TelegramMessenger.sendMessage("⚠️ TradingBoy failed to reconnect to WebSocket.\nError: " + e.getMessage());
             }
         });
+    }
+
+    // Remaining methods from your original code remain unchanged
+    // Including handleBar, aggregateCandle, handleBuyAction, handleSellAction, etc.
+
+    /**
+     * Shuts down resources like the scheduler and reconnect executor when no longer needed.
+     */
+    public void shutdown() {
+        scheduler.shutdown();
+        reconnectExecutor.shutdown();
+        logger.info("🚦 Resources for AlpacaWebSocketClient have been shutdown.");
     }
 
     /**
