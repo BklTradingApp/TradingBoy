@@ -97,25 +97,26 @@ public class DatabaseManager {
                 // Performance records table
                 "CREATE TABLE IF NOT EXISTS performance_records (" +
                         "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                        "total_trades INTEGER," +
-                        "winning_trades INTEGER," +
-                        "losing_trades INTEGER," +
-                        "total_profit DOUBLE," +
-                        "timestamp INTEGER" +
+                        "symbol TEXT NOT NULL," +
+                        "total_trades INTEGER NOT NULL," +
+                        "winning_trades INTEGER NOT NULL," +
+                        "losing_trades INTEGER NOT NULL," +
+                        "total_profit REAL NOT NULL," +
+                        "timestamp INTEGER NOT NULL" +
                         ");",
                 // Trailing stops table
                 "CREATE TABLE IF NOT EXISTS trailing_stops (" +
-                        "symbol TEXT PRIMARY KEY," +
-                        "entry_price DOUBLE," +
-                        "initial_stop_price DOUBLE," +
-                        "current_stop_price DOUBLE," +
-                        "trailing_step_percent DOUBLE," +
-                        "last_adjusted_timestamp INTEGER" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                        "symbol TEXT NOT NULL," +
+                        "stop_price REAL NOT NULL," +
+                        "timestamp INTEGER NOT NULL" +
                         ");",
                 // Maintenance table
                 "CREATE TABLE IF NOT EXISTS maintenance (" +
                         "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                        "last_run INTEGER NOT NULL" +
+                        "task TEXT NOT NULL," +
+                        "status TEXT NOT NULL," +
+                        "timestamp INTEGER NOT NULL" +
                         ");"
         };
 
@@ -196,6 +197,47 @@ public class DatabaseManager {
     }
 
     /**
+     * Inserts a trailing stop into the 'trailing_stops' table.
+     * @param stop The TrailingStop object to insert or update.
+     */
+    public void insertOrUpdateTrailingStop(TrailingStop stop) {
+        String sql = "INSERT INTO trailing_stops (symbol, stop_price, timestamp) VALUES (?,?,?) " +
+                "ON CONFLICT(symbol) DO UPDATE SET stop_price=excluded.stop_price, timestamp=excluded.timestamp;";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, stop.getSymbol());
+            ps.setDouble(2, stop.getStopPrice());
+            ps.setLong(3, stop.getTimestamp());
+            ps.executeUpdate();
+            logger.debug("🔄 Inserted/Updated trailing stop for {}", stop.getSymbol());
+        } catch (SQLException e) {
+            logger.error("❌ Failed to insert/update trailing stop for symbol {}", stop.getSymbol(), e);
+        }
+    }
+
+    /**
+     * Retrieves the trailing stop for a given symbol.
+     * @param symbol The trading symbol.
+     * @return The TrailingStop object or null if none exists.
+     */
+    public TrailingStop getTrailingStop(String symbol) {
+        String sql = "SELECT * FROM trailing_stops WHERE symbol = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, symbol);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return new TrailingStop(
+                        rs.getString("symbol"),
+                        rs.getDouble("stop_price"),
+                        rs.getLong("timestamp")
+                );
+            }
+        } catch (SQLException e) {
+            logger.error("❌ Failed to retrieve trailing stop for symbol {}", symbol, e);
+        }
+        return null;
+    }
+
+    /**
      * Retrieves the last candle for a given symbol.
      * @param symbol The trading symbol.
      * @return The last Candle object or null if none exists.
@@ -217,7 +259,7 @@ public class DatabaseManager {
                 );
             }
         } catch (SQLException e) {
-            logger.error("❌ Failed to retrieve last candle for symbol {}", symbol, e);
+            logger.error("❌ Failed to retrieve last candle for {}", symbol, e);
         }
         return null;
     }
@@ -230,7 +272,7 @@ public class DatabaseManager {
      */
     public List<Candle> getRecentCandles(String symbol, int limit) {
         List<Candle> candles = new ArrayList<>();
-        String sql = "SELECT * FROM candles WHERE symbol=? ORDER BY timestamp DESC LIMIT ?";
+        String sql = "SELECT * FROM candles WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, symbol);
             ps.setInt(2, limit);
@@ -246,23 +288,14 @@ public class DatabaseManager {
                         rs.getDouble("volume")
                 );
                 candles.add(candle);
-
-                // Example of logging with formatted timestamp
-                String formattedTime = FormatUtil.formatTimestamp(candle.getTimestamp());
-                String formattedOpen = FormatUtil.formatCurrency(candle.getOpen());
-                String formattedClose = FormatUtil.formatCurrency(candle.getClose());
-                String formattedHigh = FormatUtil.formatCurrency(candle.getHigh());
-                String formattedLow = FormatUtil.formatCurrency(candle.getLow());
-                String formattedVolume = String.format("%.2f", candle.getVolume());
-
                 logger.debug("Fetched Candle - Symbol: {}, Time: {}, Open: {}, Close: {}, High: {}, Low: {}, Volume: {}",
                         candle.getSymbol(),
-                        formattedTime,
-                        formattedOpen,
-                        formattedClose,
-                        formattedHigh,
-                        formattedLow,
-                        formattedVolume);
+                        FormatUtil.formatTimestamp(candle.getTimestamp()),
+                        FormatUtil.formatCurrency(candle.getOpen()),
+                        FormatUtil.formatCurrency(candle.getClose()),
+                        FormatUtil.formatCurrency(candle.getHigh()),
+                        FormatUtil.formatCurrency(candle.getLow()),
+                        String.format("%.2f", candle.getVolume()));
             }
         } catch (SQLException e) {
             logger.error("❌ Error fetching recent candles for symbol {}", symbol, e);
@@ -299,65 +332,5 @@ public class DatabaseManager {
         return candles;
     }
 
-    /**
-     * Inserts or updates a trailing stop for a given symbol.
-     * @param symbol                 The trading symbol.
-     * @param entryPrice             The entry price.
-     * @param initialStopPrice       The initial stop-loss price.
-     * @param currentStopPrice       The current stop-loss price after adjustments.
-     * @param trailingStepPercent    The percentage by which the stop-loss is adjusted.
-     * @param lastAdjustedTimestamp  The timestamp of the last adjustment to the stop-loss.
-     */
-    public void insertOrUpdateTrailingStop(String symbol, double entryPrice, double initialStopPrice,
-                                           double currentStopPrice, double trailingStepPercent, long lastAdjustedTimestamp) {
-        String sql = "INSERT INTO trailing_stops (symbol, entry_price, initial_stop_price, current_stop_price, trailing_step_percent, last_adjusted_timestamp) " +
-                "VALUES (?, ?, ?, ?, ?, ?) " +
-                "ON CONFLICT(symbol) DO UPDATE SET " +
-                "entry_price=excluded.entry_price, " +
-                "initial_stop_price=excluded.initial_stop_price, " +
-                "current_stop_price=excluded.current_stop_price, " +
-                "trailing_step_percent=excluded.trailing_step_percent, " +
-                "last_adjusted_timestamp=excluded.last_adjusted_timestamp;";
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setString(1, symbol);
-            ps.setDouble(2, entryPrice);
-            ps.setDouble(3, initialStopPrice);
-            ps.setDouble(4, currentStopPrice);
-            ps.setDouble(5, trailingStepPercent);
-            ps.setLong(6, lastAdjustedTimestamp);
-            ps.executeUpdate();
-            logger.debug("🔄 Inserted/Updated trailing stop for {}", symbol);
-        } catch (SQLException e) {
-            logger.error("❌ Failed to insert/update trailing stop for symbol {}", symbol, e);
-        }
-    }
-
-    /**
-     * Retrieves the trailing stop for a given symbol.
-     * @param symbol The trading symbol.
-     * @return The trailing stop details or null if none exists.
-     */
-    public TrailingStop getTrailingStop(String symbol) {
-        String sql = "SELECT * FROM trailing_stops WHERE symbol = ?";
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setString(1, symbol);
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return new TrailingStop(
-                        rs.getString("symbol"),
-                        rs.getDouble("entry_price"),
-                        rs.getDouble("initial_stop_price"),
-                        rs.getDouble("current_stop_price"),
-                        rs.getDouble("trailing_step_percent"),
-                        rs.getLong("last_adjusted_timestamp")
-                );
-            }
-        } catch (SQLException e) {
-            logger.error("❌ Failed to retrieve trailing stop for symbol {}", symbol, e);
-        }
-        return null;
-    }
-
     // Implement other CRUD operations as needed
-    // For example: getRecentCandles, insertOrUpdateTrailingStop, getTrailingStop, etc.
 }

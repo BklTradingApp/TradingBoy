@@ -1,5 +1,3 @@
-// src/main/java/com/tradingboy/alpaca/BarMessage.java
-
 package com.tradingboy.alpaca;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -13,7 +11,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 @JsonIgnoreProperties(ignoreUnknown = true) // Ignore any unknown properties
 public class BarMessage {
     @JsonProperty("T")
-    private String type; // "b" for bar
+    private String type; // Should be "bar" for bar messages
 
     @JsonProperty("S")
     private String symbol;
@@ -84,5 +82,4 @@ public class BarMessage {
     public double getVolumeWeightedAveragePrice() {
         return volumeWeightedAveragePrice;
     }
-
 }

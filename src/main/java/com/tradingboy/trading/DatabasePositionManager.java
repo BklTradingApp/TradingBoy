@@ -1,5 +1,3 @@
-// src/main/java/com/tradingboy/trading/DatabasePositionManager.java
-
 package com.tradingboy.trading;
 
 import com.tradingboy.db.DatabaseManager;
@@ -18,6 +16,7 @@ public class DatabasePositionManager {
 
     /**
      * Retrieves the current position for a given symbol.
+     *
      * @param symbol The trading symbol.
      * @return The quantity of shares held.
      */
@@ -38,7 +37,8 @@ public class DatabasePositionManager {
 
     /**
      * Updates the position for a given symbol by adding deltaQty.
-     * @param symbol  The trading symbol.
+     *
+     * @param symbol   The trading symbol.
      * @param deltaQty The change in quantity.
      */
     public static void updatePosition(String symbol, int deltaQty) {

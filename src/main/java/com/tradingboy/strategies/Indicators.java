@@ -5,6 +5,10 @@ import com.tradingboy.models.Candle;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Indicators:
+ * Provides methods to calculate technical indicators like SMA, EMA, RSI, and MACD.
+ */
 public class Indicators {
 
     /**
@@ -18,6 +22,22 @@ public class Indicators {
             sum += candles.get(i).getClose();
         }
         return sum / period;
+    }
+
+    /**
+     * Calculate Exponential Moving Average (EMA) over the last `period` closes.
+     */
+    public static double calculateEMA(List<Candle> candles, int period) {
+        if (candles.size() < period) return Double.NaN;
+
+        double multiplier = 2.0 / (period + 1);
+        double ema = calculateSMA(candles.subList(candles.size() - period, candles.size()), period);
+
+        for (int i = candles.size() - period - 1; i >= 0; i--) {
+            ema = ((candles.get(i).getClose() - ema) * multiplier) + ema;
+        }
+
+        return ema;
     }
 
     /**
@@ -53,15 +73,15 @@ public class Indicators {
     }
 
     /**
-     * Compute MACD (fastPeriod=12, slowPeriod=26, signalPeriod=9 typically) properly:
+     * Compute MACD (fastPeriod=12, slowPeriod=26, signalPeriod=9 typically):
      * Steps:
      * 1. Extract closes from candles.
-     * 2. Compute EMA(fastPeriod) and EMA(slowPeriod) arrays.
-     * 3. MACD line = fastEMA[i] - slowEMA[i] (for i starting at the max of slowPeriod).
+     * 2. Compute EMA(fastPeriod) and EMA(slowPeriod).
+     * 3. MACD line = fastEMA - slowEMA.
      * 4. Signal line = EMA of MACD line over signalPeriod.
      * 5. Histogram = MACD - Signal.
      *
-     * Returns MACDResult containing macd, signal, histogram.
+     * @return MACDResult containing macd, signal, histogram.
      */
     public static MACDResult calculateMACD(List<Candle> candles, int fastPeriod, int slowPeriod, int signalPeriod) {
         if (candles.size() < slowPeriod + signalPeriod) {
@@ -74,8 +94,6 @@ public class Indicators {
         double[] slowEMA = emaOverArray(closes, slowPeriod);
 
         // MACD line array length = length of closes, but valid MACD starts where both EMAs are defined
-        // EMAs will produce NaN in the first (period-1) positions.
-        // We'll consider only indices where both EMAs have values.
         List<Double> macdLine = new ArrayList<>();
         for (int i = 0; i < closes.length; i++) {
             if (!Double.isNaN(fastEMA[i]) && !Double.isNaN(slowEMA[i])) {
@@ -85,28 +103,26 @@ public class Indicators {
             }
         }
 
-        // Now compute Signal line as EMA of MACD line (which also may have NaNs at start)
-        // Find the first index in macdLine where we have a valid double (not NaN).
-        int firstValidMacdIndex = -1;
-        for (int i = 0; i < macdLine.size(); i++) {
-            if (!Double.isNaN(macdLine.get(i))) {
-                firstValidMacdIndex = i;
-                break;
+        // Remove NaN values from MACD line
+        List<Double> validMacdLine = new ArrayList<>();
+        for (Double val : macdLine) {
+            if (!Double.isNaN(val)) {
+                validMacdLine.add(val);
             }
         }
-        if (firstValidMacdIndex == -1) {
-            // No valid MACD
+
+        if (validMacdLine.size() < signalPeriod) {
             return new MACDResult(Double.NaN, Double.NaN, Double.NaN);
         }
 
-        double[] macdValues = new double[macdLine.size() - firstValidMacdIndex];
-        for (int i = firstValidMacdIndex; i < macdLine.size(); i++) {
-            macdValues[i - firstValidMacdIndex] = macdLine.get(i);
-        }
-
+        // Compute Signal line as EMA of MACD line
+        double[] macdValues = validMacdLine.stream().mapToDouble(Double::doubleValue).toArray();
         double[] signalLine = emaOverArray(macdValues, signalPeriod);
 
-        // The current MACD is last of macdValues
+        if (signalLine.length == 0 || Double.isNaN(signalLine[signalLine.length - 1])) {
+            return new MACDResult(Double.NaN, Double.NaN, Double.NaN);
+        }
+
         double currentMacd = macdValues[macdValues.length - 1];
         double currentSignal = signalLine[signalLine.length - 1];
         double currentHistogram = currentMacd - currentSignal;
@@ -146,14 +162,13 @@ public class Indicators {
             sum += data[i];
         }
         double multiplier = 2.0 / (period + 1);
-        double prevEMA = sum / period;
-        result[period - 1] = prevEMA;
+        double ema = sum / period;
+        result[period - 1] = ema;
 
         // Now EMA from period onwards
         for (int i = period; i < data.length; i++) {
-            double ema = ((data[i] - prevEMA) * multiplier) + prevEMA;
+            ema = ((data[i] - ema) * multiplier) + ema;
             result[i] = ema;
-            prevEMA = ema;
         }
 
         return result;
@@ -173,8 +188,16 @@ public class Indicators {
             this.histogram = histogram;
         }
 
-        public double getMacd() { return macd; }
-        public double getSignal() { return signal; }
-        public double getHistogram() { return histogram; }
+        public double getMacd() {
+            return macd;
+        }
+
+        public double getSignal() {
+            return signal;
+        }
+
+        public double getHistogram() {
+            return histogram;
+        }
     }
 }

@@ -3,6 +3,9 @@ package com.tradingboy;
 import com.tradingboy.alpaca.AlpacaService;
 import com.tradingboy.alpaca.AlpacaWebSocketClient;
 import com.tradingboy.db.DatabaseManager;
+import com.tradingboy.trading.DatabasePositionManager;
+import com.tradingboy.trading.PerformanceTracker;
+import com.tradingboy.trading.TradingManager;
 import com.tradingboy.utils.ConfigUtil;
 import com.tradingboy.utils.FormatUtil;
 import com.tradingboy.utils.TelegramMessenger;
@@ -12,21 +15,23 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.*;
 
 /**
  * Main:
- * Initializes DB, connects to Alpaca WebSocket (if keys), sends Telegram notifications,
- * schedules periodic logs and Telegram updates, and ensures graceful shutdown.
+ * Initializes DB, initializes TradingManager for WebSocket connections,
+ * sends Telegram notifications,
+ * schedules periodic logs and Telegram updates,
+ * and ensures graceful shutdown.
  */
 public class Main {
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
 
-    private static AlpacaWebSocketClient client; // WebSocket client instance
     private static ScheduledExecutorService scheduler; // Scheduler for periodic tasks
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
         logger.info("🚀 TradingBoy application starting...");
 
         // Load configuration parameters
@@ -36,48 +41,15 @@ public class Main {
         // Initialize Database (Singleton)
         DatabaseManager dbManager = DatabaseManager.getInstance();
 
-        // Retrieve API Keys and environment
-        String apiKey = ConfigUtil.getString("ALPACA_API_KEY");
-        String secretKey = ConfigUtil.getString("ALPACA_SECRET_KEY");
-        boolean useWebSocket = ConfigUtil.getBoolean("USE_WEBSOCKET");
+        // Retrieve symbols and other configurations
         List<String> symbols = ConfigUtil.getSymbols();
         String env = ConfigUtil.getString("ALPACA_ENV");
 
         // Log the environment being used
         logger.info("🔧 Trading Environment: {}", env);
 
-        // Determine WebSocket endpoint based on environment
-        String wsUrl;
-        if ("test".equalsIgnoreCase(env)) {
-            wsUrl = "wss://stream.data.alpaca.markets/v2/test";
-            logger.info("🔗 Using Test WebSocket Endpoint: {}", wsUrl);
-        } else if ("live".equalsIgnoreCase(env)) {
-            wsUrl = "wss://stream.data.alpaca.markets/v2/sip"; // Live WebSocket endpoint
-            logger.info("🔗 Using Live WebSocket Endpoint: {}", wsUrl);
-        } else if ("paper".equalsIgnoreCase(env)) {
-            wsUrl = "wss://paper-api.alpaca.markets/stream"; // Correct Paper Trading WebSocket endpoint
-            logger.info("🔗 Using Paper WebSocket Endpoint: {}", wsUrl);
-        } else {
-            logger.warn("⚠️ Unknown ALPACA_ENV '{}', defaulting to test environment.", env);
-            wsUrl = "wss://stream.data.alpaca.markets/v2/test";
-            logger.info("🔗 Using Test WebSocket Endpoint: {}", wsUrl);
-        }
-
-        // Initialize WebSocket client if configured to use WebSocket and API keys are provided
-        if (useWebSocket && apiKey != null && !apiKey.isEmpty() && secretKey != null && !secretKey.isEmpty()) {
-            try {
-                client = new AlpacaWebSocketClient(new URI(wsUrl), symbols);
-                client.connectBlocking(); // Synchronously wait for the connection to be established
-                logger.info("✅ Connected to Alpaca WebSocket for symbols: {}", symbols);
-            } catch (Exception e) {
-                logger.error("❌ Failed to connect to Alpaca WebSocket", e);
-                TelegramMessenger.sendMessage("⚠️ TradingBoy failed to connect to Alpaca WebSocket.\nError: " + e.getMessage());
-            }
-        } else {
-            logger.warn("🚫 Skipping WebSocket connection. Either USE_WEBSOCKET=false or no API keys provided.");
-            // Send Telegram notification if skipping WebSocket
-            TelegramMessenger.sendMessage("🚫 TradingBoy is running without WebSocket connection.");
-        }
+        // Initialize TradingManager
+        TradingManager.initialize();
 
         logger.info("🔧 Initialization complete!");
 
@@ -101,17 +73,7 @@ public class Main {
         // Add Shutdown Hook for Graceful Shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logger.info("🔄 Shutdown initiated. Closing resources...");
-
-            // Close WebSocket connection if open
-            if (client != null && client.isOpen()) {
-                try {
-                    client.closeBlocking();
-                    logger.info("🔌 WebSocket connection closed.");
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    logger.error("❌ Interrupted while closing WebSocket connection", e);
-                }
-            }
+            TradingManager.shutdown();
 
             // Shutdown scheduler gracefully
             if (scheduler != null && !scheduler.isShutdown()) {
@@ -136,6 +98,7 @@ public class Main {
 
     /**
      * Sends a periodic Telegram update about the current status.
+     *
      * @param symbols List of symbols being traded.
      */
     private static void sendPeriodicTelegramUpdate(List<String> symbols) {
@@ -149,7 +112,7 @@ public class Main {
         // Fetch current positions
         message.append("📊 **Current Positions**:\n");
         for (String symbol : symbols) {
-            int qty = com.tradingboy.trading.DatabasePositionManager.getPosition(symbol);
+            int qty = DatabasePositionManager.getPosition(symbol);
             message.append("- ").append(symbol).append(": ").append(qty).append(" shares\n");
         }
         message.append("\n");

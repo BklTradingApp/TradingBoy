@@ -17,6 +17,7 @@ public class TelegramMessenger {
 
     /**
      * Sends a plain text message to the configured Telegram chat.
+     *
      * @param message The message to send.
      */
     public static void sendMessage(String message) {
@@ -38,8 +39,9 @@ public class TelegramMessenger {
 
     /**
      * Sends a formatted message with currency and timestamp to Telegram.
-     * @param message The base message.
-     * @param amount The monetary amount to include.
+     *
+     * @param message   The base message.
+     * @param amount    The monetary amount to include.
      * @param timestamp The timestamp to include (epoch milliseconds).
      */
     public static void sendFormattedMessage(String message, double amount, long timestamp) {
@@ -51,10 +53,11 @@ public class TelegramMessenger {
 
     /**
      * Overloaded method to send a formatted trade message.
-     * @param side The side of the trade ("buy" or "sell").
-     * @param qty The quantity of shares traded.
+     *
+     * @param side   The side of the trade ("buy" or "sell").
+     * @param qty    The quantity of shares traded.
      * @param symbol The trading symbol.
-     * @param price The price at which the trade was executed.
+     * @param price  The price at which the trade was executed.
      */
     public static void sendTradeMessage(String side, int qty, String symbol, double price) {
         String tradeEmoji = side.equalsIgnoreCase("buy") ? "✅" : "💰";

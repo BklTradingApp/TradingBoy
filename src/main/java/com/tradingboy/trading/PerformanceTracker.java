@@ -1,5 +1,3 @@
-// src/main/java/com/tradingboy/trading/PerformanceTracker.java
-
 package com.tradingboy.trading;
 
 import com.tradingboy.db.DatabaseManager;
@@ -18,12 +16,10 @@ public class PerformanceTracker {
 
     /**
      * Updates performance metrics after a trade.
+     *
      * @param symbol The trading symbol.
      */
     public static void updatePerformance(String symbol) {
-        // Placeholder for performance tracking logic
-        // You can implement logic to track total trades, winning trades, etc.
-
         // Example: Increment total trades and determine if it's a winning trade
         // This requires fetching trade details from the 'trades' table
         // and comparing buy and sell prices to calculate profit/loss
@@ -50,20 +46,50 @@ public class PerformanceTracker {
                     double profit = sellPrice - buyPrice;
 
                     // Insert or update performance_records table
-                    String insertPerf = "INSERT INTO performance_records (total_trades, winning_trades, losing_trades, total_profit, timestamp) " +
-                            "VALUES (1, ?, ?, ?)";
+                    String insertPerf = "INSERT INTO performance_records (symbol, total_trades, winning_trades, losing_trades, total_profit, timestamp) " +
+                            "VALUES (?,?,?,?,?,?)";
+
                     boolean isWinning = profit > 0;
-                    try (PreparedStatement psPerf = DatabaseManager.getInstance().getConnection().prepareStatement(insertPerf)) {
-                        psPerf.setInt(1, isWinning ? 1 : 0);
-                        psPerf.setInt(2, isWinning ? 0 : 1);
-                        psPerf.setDouble(3, profit);
-                        psPerf.executeUpdate();
-                        logger.info("Updated performance for {}: Profit = {}", symbol, profit);
+                    String updatePerf = "UPDATE performance_records SET " +
+                            "total_trades = total_trades + 1, " +
+                            "winning_trades = winning_trades + ?, " +
+                            "losing_trades = losing_trades + ?, " +
+                            "total_profit = total_profit + ? " +
+                            "WHERE symbol = ?";
+
+                    // First, check if a record exists for the symbol
+                    String checkExist = "SELECT COUNT(*) as count FROM performance_records WHERE symbol = ?";
+                    try (PreparedStatement psCheck = DatabaseManager.getInstance().getConnection().prepareStatement(checkExist)) {
+                        psCheck.setString(1, symbol);
+                        try (ResultSet rsCheck = psCheck.executeQuery()) {
+                            if (rsCheck.next() && rsCheck.getInt("count") > 0) {
+                                // Update existing record
+                                try (PreparedStatement psUpdate = DatabaseManager.getInstance().getConnection().prepareStatement(updatePerf)) {
+                                    psUpdate.setInt(1, isWinning ? 1 : 0);
+                                    psUpdate.setInt(2, isWinning ? 0 : 1);
+                                    psUpdate.setDouble(3, profit);
+                                    psUpdate.setString(4, symbol);
+                                    psUpdate.executeUpdate();
+                                    logger.info("✅ Updated performance for {}: Profit = {}", symbol, profit);
+                                }
+                            } else {
+                                // Insert new record
+                                try (PreparedStatement psInsert = DatabaseManager.getInstance().getConnection().prepareStatement(insertPerf)) {
+                                    psInsert.setString(1, symbol);
+                                    psInsert.setInt(2, isWinning ? 1 : 0);
+                                    psInsert.setInt(3, isWinning ? 0 : 1);
+                                    psInsert.setDouble(4, profit);
+                                    psInsert.setLong(5, System.currentTimeMillis());
+                                    psInsert.executeUpdate();
+                                    logger.info("✅ Inserted performance for {}: Profit = {}", symbol, profit);
+                                }
+                            }
+                        }
                     }
                 }
             }
         } catch (Exception e) {
-            logger.error("Error updating performance for symbol {}", symbol, e);
+            logger.error("❌ Error updating performance for symbol {}", symbol, e);
         }
     }
 }
