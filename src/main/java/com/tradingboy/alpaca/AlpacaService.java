@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.*;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 
 /**
  * AlpacaService:
@@ -207,6 +206,34 @@ public class AlpacaService {
         }
 
         return null;
+    }
+
+    /**
+     * Cancels an existing order by its ID.
+     *
+     * @param orderId The Alpaca order ID to cancel.
+     * @return True if cancellation was successful, false otherwise.
+     */
+    public static boolean cancelOrder(String orderId) {
+        String url = BASE_URL + "/v2/orders/" + orderId;
+
+        try {
+            HttpResponse<JsonNode> response = Unirest.delete(url)
+                    .header("APCA-API-KEY-ID", API_KEY)
+                    .header("APCA-API-SECRET-KEY", SECRET_KEY)
+                    .asJson();
+
+            if (response.getStatus() == 200) {
+                logger.info("✅ Successfully canceled order {}", orderId);
+                return true;
+            } else {
+                logger.error("❌ Failed to cancel order {}. Status: {}, Body: {}", orderId, response.getStatus(), response.getBody());
+            }
+        } catch (Exception e) {
+            logger.error("❌ Exception while canceling order {}", orderId, e);
+        }
+
+        return false;
     }
 
     /**

@@ -66,4 +66,20 @@ public class DatabasePositionManager {
             logger.error("Error updating position for symbol {}", symbol, e);
         }
     }
+
+    /**
+     * Clears the position for a given symbol.
+     *
+     * @param symbol The trading symbol.
+     */
+    public static void clearPosition(String symbol) {
+        String sql = "DELETE FROM positions WHERE symbol = ?";
+        try (PreparedStatement ps = DatabaseManager.getInstance().getConnection().prepareStatement(sql)) {
+            ps.setString(1, symbol);
+            ps.executeUpdate();
+            logger.info("Cleared position for {}", symbol);
+        } catch (Exception e) {
+            logger.error("Error clearing position for symbol {}", symbol, e);
+        }
+    }
 }

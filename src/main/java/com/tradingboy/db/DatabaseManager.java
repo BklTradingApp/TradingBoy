@@ -13,40 +13,28 @@ import java.util.List;
 
 /**
  * DatabaseManager:
- * Manages the SQLite database connection and ensures necessary tables are present.
- * Implements the Singleton pattern to maintain a single database connection.
+ * Manages SQLite database connections and operations.
  */
 public class DatabaseManager {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
     private static DatabaseManager instance;
-    private final Connection connection;
+    private Connection connection;
 
-    /**
-     * Private constructor to enforce Singleton pattern.
-     * Initializes the database connection and ensures all necessary tables exist.
-     */
     private DatabaseManager() {
-        String dbUrl = ConfigUtil.getString("DB_URL");
         try {
-            // Explicitly load the SQLite JDBC driver
-            Class.forName("org.sqlite.JDBC");
-            logger.debug("✅ SQLite JDBC Driver loaded successfully.");
-
+            String dbUrl = ConfigUtil.getString("DB_URL");
             connection = DriverManager.getConnection(dbUrl);
             logger.info("📁 Connected to SQLite database at {}", dbUrl);
             ensureTables();
-        } catch (ClassNotFoundException e) {
-            logger.error("❌ SQLite JDBC Driver not found. Please ensure the driver is included in your project dependencies.", e);
-            throw new RuntimeException("SQLite JDBC Driver not found.", e);
         } catch (SQLException e) {
-            logger.error("❌ Failed to connect to the database at {}", dbUrl, e);
-            throw new RuntimeException("Database initialization failed", e);
+            logger.error("❌ Failed to connect to SQLite database.", e);
         }
     }
 
     /**
-     * Retrieves the singleton instance of DatabaseManager.
-     * @return The DatabaseManager instance.
+     * Singleton pattern to ensure only one instance exists.
+     *
+     * @return The singleton instance.
      */
     public static synchronized DatabaseManager getInstance() {
         if (instance == null) {
@@ -56,8 +44,9 @@ public class DatabaseManager {
     }
 
     /**
-     * Retrieves the current database connection.
-     * @return Connection object.
+     * Retrieves the active database connection.
+     *
+     * @return The Connection object.
      */
     public Connection getConnection() {
         return connection;
@@ -65,11 +54,9 @@ public class DatabaseManager {
 
     /**
      * Ensures that all necessary tables exist in the database.
-     * Creates them if they do not exist.
      */
     private void ensureTables() {
-        String[] tableCreationQueries = {
-                // Candles table
+        String[] tables = {
                 "CREATE TABLE IF NOT EXISTS candles (" +
                         "id INTEGER PRIMARY KEY AUTOINCREMENT," +
                         "symbol TEXT NOT NULL," +
@@ -80,12 +67,10 @@ public class DatabaseManager {
                         "low REAL NOT NULL," +
                         "volume REAL NOT NULL" +
                         ");",
-                // Positions table
                 "CREATE TABLE IF NOT EXISTS positions (" +
                         "symbol TEXT PRIMARY KEY," +
                         "qty INTEGER NOT NULL" +
                         ");",
-                // Trades table
                 "CREATE TABLE IF NOT EXISTS trades (" +
                         "id INTEGER PRIMARY KEY AUTOINCREMENT," +
                         "symbol TEXT NOT NULL," +
@@ -94,24 +79,23 @@ public class DatabaseManager {
                         "price REAL NOT NULL," +
                         "timestamp INTEGER NOT NULL" +
                         ");",
-                // Performance records table
                 "CREATE TABLE IF NOT EXISTS performance_records (" +
-                        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                        "symbol TEXT NOT NULL," +
-                        "total_trades INTEGER NOT NULL," +
-                        "winning_trades INTEGER NOT NULL," +
-                        "losing_trades INTEGER NOT NULL," +
-                        "total_profit REAL NOT NULL," +
+                        "symbol TEXT PRIMARY KEY," +
+                        "total_trades INTEGER DEFAULT 0," +
+                        "winning_trades INTEGER DEFAULT 0," +
+                        "losing_trades INTEGER DEFAULT 0," +
+                        "total_profit REAL DEFAULT 0.0," +
                         "timestamp INTEGER NOT NULL" +
                         ");",
-                // Trailing stops table
                 "CREATE TABLE IF NOT EXISTS trailing_stops (" +
-                        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                        "symbol TEXT NOT NULL," +
-                        "stop_price REAL NOT NULL," +
-                        "timestamp INTEGER NOT NULL" +
+                        "symbol TEXT PRIMARY KEY," +
+                        "entry_price REAL NOT NULL," +
+                        "initial_stop_price REAL NOT NULL," +
+                        "current_stop_price REAL NOT NULL," +
+                        "trailing_step_percent REAL NOT NULL," +
+                        "last_adjusted_timestamp INTEGER NOT NULL," +
+                        "stop_order_id TEXT NOT NULL" +
                         ");",
-                // Maintenance table
                 "CREATE TABLE IF NOT EXISTS maintenance (" +
                         "id INTEGER PRIMARY KEY AUTOINCREMENT," +
                         "task TEXT NOT NULL," +
@@ -121,62 +105,18 @@ public class DatabaseManager {
         };
 
         try (Statement stmt = connection.createStatement()) {
-            for (String query : tableCreationQueries) {
-                stmt.execute(query);
-                logger.info("📦 Ensured table: {}", extractTableName(query));
+            for (String table : tables) {
+                stmt.execute(table);
+                logger.info("📦 Ensured table: {}", table.split(" ")[5]); // Extract table name
             }
         } catch (SQLException e) {
-            logger.error("❌ Error creating tables in the database.", e);
-            throw new RuntimeException("Failed to create tables", e);
-        }
-
-        // Ensure a maintenance record exists
-        try (Statement stmt = connection.createStatement()) {
-            ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM maintenance");
-            if (rs.next() && rs.getInt(1) == 0) {
-                stmt.execute("INSERT INTO maintenance (last_run) VALUES (0)");
-                logger.info("📌 Inserted initial maintenance record.");
-            }
-        } catch (SQLException e) {
-            logger.error("❌ Error ensuring initial maintenance record.", e);
-            throw new RuntimeException("Failed to insert initial maintenance record", e);
+            logger.error("❌ Failed to ensure tables in SQLite database.", e);
         }
     }
 
     /**
-     * Extracts the table name from a CREATE TABLE SQL statement.
-     * @param query The SQL query.
-     * @return The table name.
-     */
-    private String extractTableName(String query) {
-        String[] tokens = query.split("\\s+"); // Split by whitespace
-        int tableIndex = -1;
-        for (int i = 0; i < tokens.length; i++) {
-            if ("TABLE".equalsIgnoreCase(tokens[i])) {
-                tableIndex = i + 1;
-                break;
-            }
-        }
-        if (tableIndex != -1 && tableIndex < tokens.length) {
-            // Skip IF, NOT, EXISTS tokens
-            int nameIndex = tableIndex;
-            while (nameIndex < tokens.length) {
-                String token = tokens[nameIndex].toUpperCase();
-                if (token.equals("IF") || token.equals("NOT") || token.equals("EXISTS")) {
-                    nameIndex++;
-                } else {
-                    break;
-                }
-            }
-            if (nameIndex < tokens.length) {
-                return tokens[nameIndex].replace("(", "").trim();
-            }
-        }
-        return "unknown";
-    }
-
-    /**
-     * Inserts a candle into the 'candles' table.
+     * Inserts a candle record into the database.
+     *
      * @param candle The Candle object to insert.
      */
     public void insertCandle(Candle candle) {
@@ -190,73 +130,34 @@ public class DatabaseManager {
             ps.setDouble(6, candle.getLow());
             ps.setDouble(7, candle.getVolume());
             ps.executeUpdate();
-            logger.debug("📈 Inserted candle for {} at {}", candle.getSymbol(), FormatUtil.formatTimestamp(candle.getTimestamp()));
+            logger.info("📈 Inserted candle for {}", candle.getSymbol());
         } catch (SQLException e) {
-            logger.error("❌ Failed to insert candle for symbol {} at {}", candle.getSymbol(), FormatUtil.formatTimestamp(candle.getTimestamp()), e);
+            logger.error("❌ Failed to insert candle for {}", candle.getSymbol(), e);
         }
-    }
-
-    /**
-     * Inserts a trailing stop into the 'trailing_stops' table.
-     * @param stop The TrailingStop object to insert or update.
-     */
-    public void insertOrUpdateTrailingStop(TrailingStop stop) {
-        String sql = "INSERT INTO trailing_stops (symbol, stop_price, timestamp) VALUES (?,?,?) " +
-                "ON CONFLICT(symbol) DO UPDATE SET stop_price=excluded.stop_price, timestamp=excluded.timestamp;";
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setString(1, stop.getSymbol());
-            ps.setDouble(2, stop.getStopPrice());
-            ps.setLong(3, stop.getTimestamp());
-            ps.executeUpdate();
-            logger.debug("🔄 Inserted/Updated trailing stop for {}", stop.getSymbol());
-        } catch (SQLException e) {
-            logger.error("❌ Failed to insert/update trailing stop for symbol {}", stop.getSymbol(), e);
-        }
-    }
-
-    /**
-     * Retrieves the trailing stop for a given symbol.
-     * @param symbol The trading symbol.
-     * @return The TrailingStop object or null if none exists.
-     */
-    public TrailingStop getTrailingStop(String symbol) {
-        String sql = "SELECT * FROM trailing_stops WHERE symbol = ?";
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setString(1, symbol);
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return new TrailingStop(
-                        rs.getString("symbol"),
-                        rs.getDouble("stop_price"),
-                        rs.getLong("timestamp")
-                );
-            }
-        } catch (SQLException e) {
-            logger.error("❌ Failed to retrieve trailing stop for symbol {}", symbol, e);
-        }
-        return null;
     }
 
     /**
      * Retrieves the last candle for a given symbol.
+     *
      * @param symbol The trading symbol.
-     * @return The last Candle object or null if none exists.
+     * @return The last Candle object or null if not found.
      */
     public Candle getLastCandle(String symbol) {
         String sql = "SELECT * FROM candles WHERE symbol = ? ORDER BY timestamp DESC LIMIT 1";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, symbol);
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return new Candle(
-                        rs.getString("symbol"),
-                        rs.getLong("timestamp"),
-                        rs.getDouble("open"),
-                        rs.getDouble("close"),
-                        rs.getDouble("high"),
-                        rs.getDouble("low"),
-                        rs.getDouble("volume")
-                );
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return new Candle(
+                            rs.getString("symbol"),
+                            rs.getLong("timestamp"),
+                            rs.getDouble("open"),
+                            rs.getDouble("close"),
+                            rs.getDouble("high"),
+                            rs.getDouble("low"),
+                            rs.getDouble("volume")
+                    );
+                }
             }
         } catch (SQLException e) {
             logger.error("❌ Failed to retrieve last candle for {}", symbol, e);
@@ -265,7 +166,119 @@ public class DatabaseManager {
     }
 
     /**
+     * Inserts a trailing stop record into the database.
+     *
+     * @param trailingStop The TrailingStop object to insert.
+     */
+    public void insertTrailingStop(TrailingStop trailingStop) {
+        String sql = "INSERT INTO trailing_stops (symbol, entry_price, initial_stop_price, current_stop_price, trailing_step_percent, last_adjusted_timestamp, stop_order_id) VALUES (?,?,?,?,?,?,?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, trailingStop.getSymbol());
+            ps.setDouble(2, trailingStop.getEntryPrice());
+            ps.setDouble(3, trailingStop.getInitialStopPrice());
+            ps.setDouble(4, trailingStop.getCurrentStopPrice());
+            ps.setDouble(5, trailingStop.getTrailingStepPercent());
+            ps.setLong(6, trailingStop.getLastAdjustedTimestamp());
+            ps.setString(7, trailingStop.getStopOrderId());
+            ps.executeUpdate();
+            logger.info("📈 Inserted trailing stop for {}", trailingStop.getSymbol());
+        } catch (SQLException e) {
+            logger.error("❌ Failed to insert trailing stop for {}", trailingStop.getSymbol(), e);
+        }
+    }
+
+    /**
+     * Retrieves the trailing stop for a given symbol.
+     *
+     * @param symbol The trading symbol.
+     * @return The TrailingStop object or null if not found.
+     */
+    public TrailingStop getTrailingStop(String symbol) {
+        String sql = "SELECT * FROM trailing_stops WHERE symbol = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, symbol);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return new TrailingStop(
+                            rs.getString("symbol"),
+                            rs.getDouble("entry_price"),
+                            rs.getDouble("initial_stop_price"),
+                            rs.getDouble("current_stop_price"),
+                            rs.getDouble("trailing_step_percent"),
+                            rs.getLong("last_adjusted_timestamp"),
+                            rs.getString("stop_order_id")
+                    );
+                }
+            }
+        } catch (SQLException e) {
+            logger.error("❌ Failed to retrieve trailing stop for {}", symbol, e);
+        }
+        return null;
+    }
+
+    /**
+     * Updates the trailing stop for a given symbol.
+     *
+     * @param trailingStop The updated TrailingStop object.
+     */
+    public void updateTrailingStop(TrailingStop trailingStop) {
+        String sql = "UPDATE trailing_stops SET current_stop_price = ?, trailing_step_percent = ?, last_adjusted_timestamp = ?, stop_order_id = ? WHERE symbol = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setDouble(1, trailingStop.getCurrentStopPrice());
+            ps.setDouble(2, trailingStop.getTrailingStepPercent());
+            ps.setLong(3, trailingStop.getLastAdjustedTimestamp());
+            ps.setString(4, trailingStop.getStopOrderId());
+            ps.setString(5, trailingStop.getSymbol());
+            ps.executeUpdate();
+            logger.info("📈 Updated trailing stop for {}", trailingStop.getSymbol());
+        } catch (SQLException e) {
+            logger.error("❌ Failed to update trailing stop for {}", trailingStop.getSymbol(), e);
+        }
+    }
+
+    /**
+     * Deletes the trailing stop for a given symbol.
+     *
+     * @param symbol The trading symbol.
+     */
+    public void deleteTrailingStop(String symbol) {
+        String sql = "DELETE FROM trailing_stops WHERE symbol = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, symbol);
+            ps.executeUpdate();
+            logger.info("🗑️ Deleted trailing stop for {}", symbol);
+        } catch (SQLException e) {
+            logger.error("❌ Failed to delete trailing stop for {}", symbol, e);
+        }
+    }
+
+    /**
+     * Inserts a trade record into the database.
+     *
+     * @param symbol    The trading symbol.
+     * @param side      The side of the trade ("buy" or "sell").
+     * @param qty       The quantity of shares traded.
+     * @param price     The price at which the trade was executed.
+     * @param timestamp The timestamp of the trade.
+     */
+    public void insertTrade(String symbol, String side, int qty, double price, long timestamp) {
+        String sql = "INSERT INTO trades (symbol, side, qty, price, timestamp) VALUES (?,?,?,?,?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, symbol);
+            ps.setString(2, side);
+            ps.setInt(3, qty);
+            ps.setDouble(4, price);
+            ps.setLong(5, timestamp);
+            ps.executeUpdate();
+            logger.info("📦 Inserted trade: {} {} shares of {} at {}", side, qty, symbol, FormatUtil.formatCurrency(price));
+        } catch (SQLException e) {
+            logger.error("❌ Failed to insert trade for {}: {} shares at {}", symbol, qty, price, e);
+        }
+    }
+
+    /**
      * Retrieves a list of recent candles for a given symbol.
+     *
      * @param symbol The trading symbol.
      * @param limit  The number of recent candles to retrieve.
      * @return List of Candle objects.
@@ -305,6 +318,7 @@ public class DatabaseManager {
 
     /**
      * Retrieves all candles for a given symbol.
+     *
      * @param symbol The trading symbol.
      * @return List of all Candle objects.
      */
@@ -330,6 +344,34 @@ public class DatabaseManager {
             logger.error("❌ Error fetching all candles for symbol {}", symbol, e);
         }
         return candles;
+    }
+
+    /**
+     * Retrieves all active trailing stops.
+     *
+     * @return List of TrailingStop objects.
+     */
+    public List<TrailingStop> getAllTrailingStops() {
+        List<TrailingStop> trailingStops = new ArrayList<>();
+        String sql = "SELECT * FROM trailing_stops";
+        try (PreparedStatement ps = connection.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                TrailingStop trailingStop = new TrailingStop(
+                        rs.getString("symbol"),
+                        rs.getDouble("entry_price"),
+                        rs.getDouble("initial_stop_price"),
+                        rs.getDouble("current_stop_price"),
+                        rs.getDouble("trailing_step_percent"),
+                        rs.getLong("last_adjusted_timestamp"),
+                        rs.getString("stop_order_id")
+                );
+                trailingStops.add(trailingStop);
+            }
+        } catch (SQLException e) {
+            logger.error("❌ Failed to retrieve all trailing stops.", e);
+        }
+        return trailingStops;
     }
 
     // Implement other CRUD operations as needed

@@ -49,11 +49,11 @@ public class TradingManager {
         boolean isClosed = AlpacaService.isMarketClosed();
         if (isClosed) {
             logger.info("⏰ Market is currently closed.");
-            TelegramMessenger.sendMessage("🕒 Market is currently closed.");
+            // TelegramMessenger.sendMessage("🕒 Market is currently closed.");
             disconnectWebSockets();
         } else {
             logger.info("📈 Market is currently open.");
-            TelegramMessenger.sendMessage("📈 Market is currently open.");
+            // TelegramMessenger.sendMessage("📈 Market is currently open.");
             connectWebSockets();
         }
     }

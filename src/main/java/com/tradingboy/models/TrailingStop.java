@@ -11,6 +11,7 @@ public class TrailingStop {
     private double currentStopPrice;
     private double trailingStepPercent;
     private long lastAdjustedTimestamp;
+    private String stopOrderId; // ID of the current stop-loss order
 
     /**
      * Constructor with all parameters.
@@ -21,34 +22,20 @@ public class TrailingStop {
      * @param currentStopPrice      The current stop-loss price after adjustments.
      * @param trailingStepPercent   The percentage by which the stop-loss is adjusted.
      * @param lastAdjustedTimestamp The timestamp of the last adjustment.
+     * @param stopOrderId           The Alpaca order ID for the stop-loss order.
      */
     public TrailingStop(String symbol, double entryPrice, double initialStopPrice, double currentStopPrice,
-                        double trailingStepPercent, long lastAdjustedTimestamp) {
+                        double trailingStepPercent, long lastAdjustedTimestamp, String stopOrderId) {
         this.symbol = symbol;
         this.entryPrice = entryPrice;
         this.initialStopPrice = initialStopPrice;
         this.currentStopPrice = currentStopPrice;
         this.trailingStepPercent = trailingStepPercent;
         this.lastAdjustedTimestamp = lastAdjustedTimestamp;
+        this.stopOrderId = stopOrderId;
     }
 
-    /**
-     * Constructor with fewer parameters if needed.
-     * Adjust or remove based on your application's requirements.
-     *
-     * @param symbol    The trading symbol.
-     * @param stopPrice The stop-loss price.
-     * @param timestamp The timestamp when the stop was set.
-     */
-    public TrailingStop(String symbol, double stopPrice, long timestamp) {
-        this.symbol = symbol;
-        this.initialStopPrice = stopPrice;
-        this.currentStopPrice = stopPrice;
-        this.trailingStepPercent = 0.0;
-        this.lastAdjustedTimestamp = timestamp;
-    }
-
-    // Getter and Setter Methods
+    // Getters and Setters
 
     public String getSymbol() {
         return symbol;
@@ -58,16 +45,8 @@ public class TrailingStop {
         return entryPrice;
     }
 
-    public void setEntryPrice(double entryPrice) {
-        this.entryPrice = entryPrice;
-    }
-
     public double getInitialStopPrice() {
         return initialStopPrice;
-    }
-
-    public void setInitialStopPrice(double initialStopPrice) {
-        this.initialStopPrice = initialStopPrice;
     }
 
     public double getCurrentStopPrice() {
@@ -82,10 +61,6 @@ public class TrailingStop {
         return trailingStepPercent;
     }
 
-    public void setTrailingStepPercent(double trailingStepPercent) {
-        this.trailingStepPercent = trailingStepPercent;
-    }
-
     public long getLastAdjustedTimestamp() {
         return lastAdjustedTimestamp;
     }
@@ -94,22 +69,12 @@ public class TrailingStop {
         this.lastAdjustedTimestamp = lastAdjustedTimestamp;
     }
 
-    /**
-     * Returns the current stop price.
-     *
-     * @return Current stop price.
-     */
-    public double getStopPrice() {
-        return currentStopPrice;
+    public String getStopOrderId() {
+        return stopOrderId;
     }
 
-    /**
-     * Returns the timestamp of the last adjustment.
-     *
-     * @return Timestamp of last adjustment.
-     */
-    public long getTimestamp() {
-        return lastAdjustedTimestamp;
+    public void setStopOrderId(String stopOrderId) {
+        this.stopOrderId = stopOrderId;
     }
 
     @Override
@@ -121,6 +86,7 @@ public class TrailingStop {
                 ", currentStopPrice=" + currentStopPrice +
                 ", trailingStepPercent=" + trailingStepPercent +
                 ", lastAdjustedTimestamp=" + lastAdjustedTimestamp +
+                ", stopOrderId='" + stopOrderId + '\'' +
                 '}';
     }
 }

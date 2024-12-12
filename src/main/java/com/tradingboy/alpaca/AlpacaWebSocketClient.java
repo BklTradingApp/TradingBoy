@@ -3,8 +3,8 @@ package com.tradingboy.alpaca;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tradingboy.db.DatabaseManager;
-import com.tradingboy.alpaca.BarMessage;
 import com.tradingboy.models.Candle;
+import com.tradingboy.models.TrailingStop;
 import com.tradingboy.strategies.EnhancedTradingStrategy;
 import com.tradingboy.trading.DatabasePositionManager;
 import com.tradingboy.trading.PerformanceTracker;
@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.sql.PreparedStatement;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -29,9 +30,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * AlpacaWebSocketClient:
- * - Streams data from Alpaca's WebSocket API.
- * - Can subscribe to different channels based on the WebSocket URL.
- * - Handles messages accordingly.
+ * Handles real-time data from Alpaca's WebSocket streams.
  */
 public class AlpacaWebSocketClient extends WebSocketClient {
     private static final Logger logger = LoggerFactory.getLogger(AlpacaWebSocketClient.class);
@@ -39,7 +38,7 @@ public class AlpacaWebSocketClient extends WebSocketClient {
 
     private final List<String> symbols;
     private final List<String> channels;
-    private final String clientType; // e.g., "marketData", "account"
+    private final String clientType; // "account" or "marketData"
 
     private final Map<String, List<BarMessage>> symbolBars = new HashMap<>();
     private final int BARS_PER_CANDLE = 5;
@@ -232,6 +231,7 @@ public class AlpacaWebSocketClient extends WebSocketClient {
         try {
             BarMessage bar = mapper.treeToValue(json, BarMessage.class);
             handleBar(bar);
+            handleTrailingStop(bar); // New method to manage trailing stops
         } catch (Exception e) {
             logger.error("❌ Error converting JSON to BarMessage on {} client: {}", clientType, json.toString(), e);
         }
@@ -243,9 +243,42 @@ public class AlpacaWebSocketClient extends WebSocketClient {
      * @param json The JSON node of the trade update message.
      */
     private void handleTradeUpdates(JsonNode json) {
-        // Implement trade update handling if needed
-        logger.info("Received trade update on {} client: {}", clientType, json.toString());
-        // Example: Update positions, log trades, etc.
+        // Parse the message to extract trade updates
+        // Example message format (adjust based on Alpaca's actual message structure):
+        // {"event": "trade_update", "trade": {"symbol": "AAPL", "side": "buy", "qty": 10, "price": 150.25, "timestamp": "2024-12-11T15:30:00Z"}}
+
+        try {
+            String event = json.has("event") ? json.get("event").asText() : "";
+            if ("trade_update".equalsIgnoreCase(event)) {
+                JsonNode trade = json.get("trade");
+                String symbol = trade.has("symbol") ? trade.get("symbol").asText() : "";
+                String side = trade.has("side") ? trade.get("side").asText() : "";
+                int qty = trade.has("qty") ? trade.get("qty").asInt() : 0;
+                double price = trade.has("price") ? trade.get("price").asDouble() : 0.0;
+                String timestampStr = trade.has("timestamp") ? trade.get("timestamp").asText() : "";
+                long timestamp = 0;
+                if (!timestampStr.isEmpty()) {
+                    timestamp = Instant.parse(timestampStr).toEpochMilli();
+                }
+
+                // Record the trade in the database
+                DatabaseManager.getInstance().insertTrade(symbol, side, qty, price, timestamp);
+
+                // Log and notify the trade
+                logger.info("📦 Recorded trade: {} {} shares of {} at {}", side, qty, symbol, FormatUtil.formatCurrency(price));
+                TelegramMessenger.sendTradeMessage(side, qty, symbol, price);
+
+                if ("buy".equalsIgnoreCase(side)) {
+                    // After a successful buy, place trailing stop-loss
+                    placeTrailingStop(symbol, qty, price, timestamp);
+                } else if ("sell".equalsIgnoreCase(side)) {
+                    // After a sell, remove any existing trailing stop
+                    DatabaseManager.getInstance().deleteTrailingStop(symbol);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("❌ Error handling trade update message: {}", json.toString(), e);
+        }
     }
 
     /**
@@ -494,13 +527,8 @@ public class AlpacaWebSocketClient extends WebSocketClient {
                 recordTrade(symbol, "buy", qty, status.getFilledAvgPrice());
                 TelegramMessenger.sendTradeMessage("buy", qty, symbol, status.getFilledAvgPrice());
 
-                // Place stop-loss
-                double stopLossPercent = ConfigUtil.getDouble("STOP_LOSS_PERCENT");
-                double stopPrice = status.getFilledAvgPrice() * (1 - stopLossPercent / 100.0);
-                String stopOrderId = AlpacaService.placeStopOrder(symbol, qty, stopPrice, "sell");
-                if (stopOrderId != null) {
-                    TelegramMessenger.sendMessage("🔒 Stop-loss placed at " + FormatUtil.formatCurrency(stopPrice) + " for " + symbol);
-                }
+                // Place trailing stop-loss
+                placeTrailingStop(symbol, qty, status.getFilledAvgPrice(), System.currentTimeMillis());
 
                 // Place take-profit
                 double takeProfitPercent = ConfigUtil.getDouble("TAKE_PROFIT_PERCENT");
@@ -552,10 +580,51 @@ public class AlpacaWebSocketClient extends WebSocketClient {
                 recordTrade(symbol, "sell", qty, status.getFilledAvgPrice());
                 TelegramMessenger.sendTradeMessage("sell", qty, symbol, status.getFilledAvgPrice());
                 PerformanceTracker.updatePerformance(symbol);
+
+                // Remove any existing trailing stop
+                DatabaseManager.getInstance().deleteTrailingStop(symbol);
             }
 
         } else {
             logger.info("No shares of {} to sell.", symbol);
+        }
+    }
+
+    /**
+     * Places a trailing stop-loss order for a bought position.
+     *
+     * @param symbol    The trading symbol.
+     * @param qty       The quantity bought.
+     * @param price     The entry price.
+     * @param timestamp The timestamp of the trade.
+     */
+    private void placeTrailingStop(String symbol, int qty, double price, long timestamp) {
+        double trailingStepPercent = ConfigUtil.getDouble("TRAILING_STEP_PERCENT");
+        double initialStopPrice = price * (1 - ConfigUtil.getDouble("STOP_LOSS_PERCENT") / 100.0);
+
+        // Place the initial trailing stop-loss order
+        String stopOrderId = AlpacaService.placeStopOrder(symbol, qty, initialStopPrice, "sell");
+
+        if (stopOrderId != null) {
+            // Create a TrailingStop object
+            TrailingStop trailingStop = new TrailingStop(
+                    symbol,
+                    price,
+                    initialStopPrice,
+                    initialStopPrice,
+                    trailingStepPercent,
+                    timestamp,
+                    stopOrderId
+            );
+
+            // Insert the trailing stop into the database
+            DatabaseManager.getInstance().insertTrailingStop(trailingStop);
+
+            logger.info("🔒 Trailing stop-loss placed for {} at {}", symbol, FormatUtil.formatCurrency(initialStopPrice));
+            TelegramMessenger.sendMessage("🔒 Trailing stop-loss placed for " + symbol + " at " + FormatUtil.formatCurrency(initialStopPrice));
+        } else {
+            logger.error("❌ Failed to place initial trailing stop-loss for {}", symbol);
+            TelegramMessenger.sendMessage("❌ Failed to place initial trailing stop-loss for " + symbol);
         }
     }
 
@@ -580,6 +649,57 @@ public class AlpacaWebSocketClient extends WebSocketClient {
             logger.info("📦 Recorded trade: {} {} shares of {} at {}", side, qty, symbol, FormatUtil.formatCurrency(price));
         } catch (Exception e) {
             logger.error("❌ Error recording trade for {} side {} qty {} price {}", symbol, side, qty, price, e);
+        }
+    }
+
+    /**
+     * Handles trailing stop-loss adjustments based on incoming bar data.
+     *
+     * @param bar The incoming bar data.
+     */
+    private void handleTrailingStop(BarMessage bar) {
+        String symbol = bar.getSymbol();
+        double currentPrice = bar.getClose(); // Assuming 'close' is the latest price
+
+        TrailingStop trailingStop = DatabaseManager.getInstance().getTrailingStop(symbol);
+        if (trailingStop == null) {
+            // No trailing stop exists for this symbol
+            return;
+        }
+
+        double trailingStepPercent = trailingStop.getTrailingStepPercent();
+        double newStopPrice = trailingStop.getCurrentStopPrice();
+
+        // Calculate the potential new stop price based on trailing step
+        double potentialStopPrice = currentPrice * (1 - trailingStepPercent / 100.0);
+
+        // Update stop price only if the potential stop price is higher than the current stop price
+        if (potentialStopPrice > trailingStop.getCurrentStopPrice()) {
+            // Cancel the existing stop-loss order
+            boolean cancelSuccess = AlpacaService.cancelOrder(trailingStop.getStopOrderId());
+            if (!cancelSuccess) {
+                logger.error("❌ Failed to cancel existing trailing stop order {} for {}", trailingStop.getStopOrderId(), symbol);
+                TelegramMessenger.sendMessage("❌ Failed to cancel existing trailing stop order " + trailingStop.getStopOrderId() + " for " + symbol);
+                return;
+            }
+
+            // Place a new trailing stop-loss order at the updated price
+            String newStopOrderId = AlpacaService.placeStopOrder(symbol, DatabasePositionManager.getPosition(symbol),
+                    potentialStopPrice, "sell");
+
+            if (newStopOrderId != null) {
+                // Update the trailing stop in the database
+                trailingStop.setCurrentStopPrice(potentialStopPrice);
+                trailingStop.setLastAdjustedTimestamp(System.currentTimeMillis());
+                trailingStop.setStopOrderId(newStopOrderId);
+                DatabaseManager.getInstance().updateTrailingStop(trailingStop);
+
+                logger.info("📈 Trailing stop updated for {}: New Stop Price = {}", symbol, FormatUtil.formatCurrency(potentialStopPrice));
+                TelegramMessenger.sendMessage("📈 Trailing stop updated for " + symbol + ": New Stop Price = " + FormatUtil.formatCurrency(potentialStopPrice));
+            } else {
+                logger.error("❌ Failed to place updated trailing stop for {}", symbol);
+                TelegramMessenger.sendMessage("❌ Failed to place updated trailing stop for " + symbol);
+            }
         }
     }
 }
